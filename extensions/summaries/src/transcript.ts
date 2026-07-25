@@ -40,6 +40,18 @@ export function getRunEntries(
   return baselineIndex === -1 ? [] : branch.slice(baselineIndex + 1);
 }
 
+export function countToolCalls(entries: readonly SessionEntry[]) {
+  return entries.reduce((count, entry) => {
+    if (entry.type !== "message" || entry.message.role !== "assistant") {
+      return count;
+    }
+    return (
+      count +
+      entry.message.content.filter((block) => block.type === "toolCall").length
+    );
+  }, 0);
+}
+
 function truncateUtf8(text: string, maxBytes: number) {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
 

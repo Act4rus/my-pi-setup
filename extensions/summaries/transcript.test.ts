@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
+  countToolCalls,
   createRunBoundary,
   getRunEntries,
   serializeRunTranscript,
@@ -51,6 +52,50 @@ test("run slicing starts after the before_agent_start leaf", () => {
     ["new"],
   );
   assert.deepEqual(getRunEntries(entries, "missing"), []);
+});
+
+test("counts tool calls from assistant messages only", () => {
+  const toolCalls = Array.from({ length: 10 }, (_, index) => ({
+    type: "toolCall" as const,
+    id: `call-${index}`,
+    name: "read",
+    arguments: { path: `file-${index}.ts` },
+  }));
+  const assistant = entry("assistant", {
+    role: "assistant",
+    content: toolCalls,
+    api: "openai-codex-responses",
+    provider: "openai-codex",
+    model: "gpt-5.6-luna",
+    usage,
+    stopReason: "toolUse",
+    timestamp: 1,
+  });
+  const result = entry("result", {
+    role: "toolResult",
+    toolCallId: "call-0",
+    toolName: "read",
+    content: [{ type: "text", text: "done" }],
+    isError: false,
+    timestamp: 2,
+  });
+
+  assert.equal(countToolCalls([assistant, result]), 10);
+  assert.equal(
+    countToolCalls([
+      entry("nine-calls", {
+        role: "assistant",
+        content: toolCalls.slice(0, 9),
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        model: "gpt-5.6-luna",
+        usage,
+        stopReason: "toolUse",
+        timestamp: 1,
+      }),
+    ]),
+    9,
+  );
 });
 
 test("transcript omits thinking, images, and recap entries while redacting tool data", () => {

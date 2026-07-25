@@ -6,6 +6,7 @@ import { loadSummaryConfig, saveSummaryConfig } from "./src/config.ts";
 import { summarizeRun } from "./src/summarizer.ts";
 import {
   buildFallbackRecap,
+  countToolCalls,
   createRunBoundary,
   getRunEntries,
   serializeRunTranscript,
@@ -19,6 +20,7 @@ import {
 
 const RECAP_ENTRY_TYPE = "summary-recap";
 const STATUS_KEY = "summaries";
+const MIN_TOOL_CALLS_FOR_RECAP = 10;
 const SHUTDOWN_WAIT_MS = 1_000;
 
 async function waitForCancellation(
@@ -79,7 +81,11 @@ export default function (pi: ExtensionAPI) {
       ctx.sessionManager.getBranch(),
       run.baselineLeafId,
     );
-    if (entries.length === 0) return;
+    if (
+      entries.length === 0 ||
+      countToolCalls(entries) < MIN_TOOL_CALLS_FOR_RECAP
+    )
+      return;
 
     const config = loadSummaryConfig();
     const controller = new AbortController();
