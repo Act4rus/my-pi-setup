@@ -1,14 +1,19 @@
 import { homedir } from "node:os";
 import { relative } from "node:path";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ReadonlyFooterDataProvider,
-  Theme,
+import {
+  DynamicBorder,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type ReadonlyFooterDataProvider,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Container,
   getCapabilities,
   hyperlink,
+  type SelectItem,
+  SelectList,
+  Text,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -87,7 +92,8 @@ function isExpandable(component: RenderableNode): component is ExpandableNode {
 }
 
 function parseResourceSection(component: RenderableNode) {
-  if (isExpandable(component)) component.setExpanded(false);
+  if (!isExpandable(component)) return;
+  component.setExpanded(false);
 
   const lines = renderedText(component)
     .split("\n")
@@ -150,7 +156,7 @@ function hideThemesSection(component: RenderableNode) {
       .find((line) => line.trim())
       ?.trim();
 
-    if (firstLine === "[Themes]") {
+    if (firstLine === "[Themes]" && isExpandable(child)) {
       const removeCount =
         component.children[index + 1] &&
         renderedText(component.children[index + 1]!).trim() === ""
@@ -172,27 +178,8 @@ function padToWidth(text: string, width: number) {
   return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
 }
 
-function wrapItems(items: string[], width: number) {
-  if (width <= 0) return [];
-
-  const lines: string[] = [];
-  let line = "";
-  for (const item of items) {
-    const next = line ? `${line} · ${item}` : item;
-    if (visibleWidth(next) <= width) {
-      line = next;
-      continue;
-    }
-    if (line) lines.push(line);
-    line = truncateToWidth(item, width, "…");
-  }
-  if (line) lines.push(line);
-  return lines;
-}
-
 class ResourcePanel implements RenderableNode {
   private sections: ResourceSection[] = [];
-  private expanded = false;
 
   constructor(private readonly theme: Theme) {}
 
@@ -200,52 +187,43 @@ class ResourcePanel implements RenderableNode {
     this.sections = sections;
   }
 
-  setExpanded(expanded: boolean) {
-    this.expanded = expanded;
+  getItems(name: "Skills" | "Extensions") {
+    return this.sections.find((section) => section.name === name)?.items ?? [];
   }
 
-  render(width: number) {
-    if (this.sections.length === 0 || width < 8) return [];
+  // Keep Ctrl+O focused on tool output; resource details use /skills and /extensions.
+  setExpanded(_expanded: boolean) {}
 
-    const contentWidth = width - 4;
-    const border = (text: string) => this.theme.fg("borderMuted", text);
-    const row = (content: string) =>
-      `${border("│")} ${padToWidth(content, contentWidth)} ${border("│")}`;
-    const title = " workspace ";
-    const topFill = "─".repeat(Math.max(0, width - title.length - 3));
+  render(width: number) {
+    if (this.sections.length === 0 || width < 24) return [];
+
+    const context = this.sections.find((section) => section.name === "Context");
+    const contextItems = context?.items.join(" · ") ?? "none";
+    const contextCount = context?.items.length ?? 0;
+    const contextNoun = contextCount === 1 ? "file" : "files";
+    const contextBar = ` Context · ${contextCount} ${contextNoun}  ${contextItems}`;
     const lines = [
-      `${border("╭─")}${this.theme.fg("accent", this.theme.bold(title))}${border(`${topFill}╮`)}`,
+      "",
+      this.theme.bg("selectedBg", padToWidth(contextBar, width)),
     ];
 
-    const labelWidth = Math.min(
-      Math.max(...this.sections.map((section) => section.name.length)),
-      Math.max(1, contentWidth - 8),
-    );
-    for (const section of this.sections) {
-      const noun =
-        section.name === "Context"
-          ? section.items.length === 1
-            ? "file"
-            : "files"
-          : "loaded";
-      const summary = `${this.theme.fg("text", section.name.padEnd(labelWidth))}  ${this.theme.fg("muted", `${section.items.length} ${noun}`)}`;
-      lines.push(row(summary));
+    for (const name of ["Skills", "Extensions"] as const) {
+      const items = this.getItems(name);
+      if (items.length === 0) continue;
 
-      if (this.expanded) {
-        const indent = " ".repeat(Math.min(labelWidth + 2, contentWidth - 1));
-        const detailWidth = Math.max(1, contentWidth - indent.length);
-        for (const detail of wrapItems(section.items, detailWidth)) {
-          lines.push(row(`${indent}${this.theme.fg("dim", detail)}`));
-        }
-      }
+      const command = `/${name.toLowerCase()}`;
+      const heading = columns(
+        `${this.theme.fg("accent", "▌")} ${this.theme.bold(name)} ${this.theme.fg("muted", `· ${items.length}`)}`,
+        this.theme.fg("accent", command),
+        width,
+      );
+      const previewItems = items.slice(0, 3);
+      const remaining = items.length - previewItems.length;
+      const preview = `${previewItems.join(" · ")}${remaining > 0 ? ` · +${remaining}` : ""}`;
+      lines.push(heading, this.theme.fg("dim", `  ${preview}`));
     }
 
-    const hint = this.expanded ? "ctrl+o collapse" : "ctrl+o details";
-    const bottomFill = "─".repeat(Math.max(0, width - hint.length - 4));
-    lines.push(
-      `${border("╰─")}${this.theme.fg("dim", hint)}${border(`─${bottomFill}╯`)}`,
-    );
-    return ["", ...lines, ""];
+    return [...lines, ""];
   }
 
   invalidate() {}
@@ -320,6 +298,89 @@ export default function uiCustomization(pi: ExtensionAPI) {
       );
     }
   }
+
+  async function showResourceList(
+    name: "Skills" | "Extensions",
+    ctx: ExtensionContext,
+  ) {
+    if (ctx.mode !== "tui") return;
+
+    const items = resourcePanel?.getItems(name) ?? [];
+    if (items.length === 0) {
+      ctx.ui.notify(`No loaded ${name.toLowerCase()} found`, "warning");
+      return;
+    }
+
+    await ctx.ui.custom<void>(
+      (tui, theme, _keybindings, done) => {
+        const container = new Container();
+        container.addChild(
+          new DynamicBorder((text: string) => theme.fg("borderAccent", text)),
+        );
+        container.addChild(
+          new Text(
+            `${theme.fg("accent", theme.bold(name))} ${theme.fg("muted", `· ${items.length} loaded`)}`,
+            1,
+            0,
+          ),
+        );
+
+        const selectItems: SelectItem[] = items.map((item, index) => ({
+          value: `${index}`,
+          label: item,
+        }));
+        const list = new SelectList(
+          selectItems,
+          Math.min(selectItems.length, 14),
+          {
+            selectedPrefix: (text) => theme.fg("accent", text),
+            selectedText: (text) => theme.fg("text", text),
+            description: (text) => theme.fg("muted", text),
+            scrollInfo: (text) => theme.fg("dim", text),
+            noMatch: (text) => theme.fg("warning", text),
+          },
+        );
+        list.onSelect = () => done(undefined);
+        list.onCancel = () => done(undefined);
+        container.addChild(list);
+        container.addChild(
+          new Text(theme.fg("dim", "↑↓ browse · enter/esc close"), 1, 0),
+        );
+        container.addChild(
+          new DynamicBorder((text: string) => theme.fg("borderAccent", text)),
+        );
+
+        return {
+          render: (width: number) => container.render(width),
+          invalidate: () => container.invalidate(),
+          handleInput: (data: string) => {
+            list.handleInput(data);
+            tui.requestRender();
+          },
+        };
+      },
+      {
+        overlay: true,
+        overlayOptions: {
+          width: "70%",
+          minWidth: 48,
+          maxHeight: "80%",
+          anchor: "center",
+          margin: 1,
+        },
+      },
+    );
+  }
+
+  pi.registerCommand("skills", {
+    description: "Show all loaded skills",
+    handler: async (_args, ctx) => showResourceList("Skills", ctx),
+  });
+
+  pi.registerCommand("extensions", {
+    description: "Show all loaded extensions",
+    handler: async (_args, ctx) => showResourceList("Extensions", ctx),
+  });
 
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
