@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { relative } from "node:path";
 import {
+  CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
   type ReadonlyFooterDataProvider,
@@ -175,6 +176,34 @@ function hideThemesSection(component: RenderableNode) {
 function padToWidth(text: string, width: number) {
   const fitted = truncateToWidth(text, width, "…");
   return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
+}
+
+class RoundedEditor extends CustomEditor {
+  override render(width: number) {
+    if (width < 4) return super.render(width);
+
+    const innerWidth = width - 2;
+    const rendered = super.render(innerWidth);
+    if (rendered.length < 3) return rendered;
+
+    const [top, ...remaining] = rendered;
+    const bottomIndex = remaining.findIndex((line, index) => {
+      if (index === 0) return false;
+      const plain = sanitizeTerminalLabel(line);
+      return plain === "─".repeat(innerWidth) || /^─── ↓ \d+ more /.test(plain);
+    });
+    if (bottomIndex === -1) return rendered;
+
+    const [bottom] = remaining.splice(bottomIndex, 1);
+    const side = this.borderColor("│");
+    return [
+      `${this.borderColor("╭")}${padToWidth(top!, innerWidth)}${this.borderColor("╮")}`,
+      ...remaining.map(
+        (line) => `${side}${padToWidth(line, innerWidth)}${side}`,
+      ),
+      `${this.borderColor("╰")}${padToWidth(bottom!, innerWidth)}${this.borderColor("╯")}`,
+    ];
+  }
 }
 
 class ResourcePanel implements RenderableNode {
@@ -400,15 +429,16 @@ export default function uiCustomization(pi: ExtensionAPI) {
       return resourcePanel;
     });
 
+    ctx.ui.setEditorComponent(
+      (tui, theme, keybindings) => new RoundedEditor(tui, theme, keybindings),
+    );
+
     ctx.ui.setFooter((tui, theme, footerData: ReadonlyFooterDataProvider) => {
       requestRender = () => tui.requestRender();
 
       return {
         invalidate() {},
         render(width: number) {
-          if (width < 6) return [];
-
-          const contentWidth = width - 4;
           const directory = theme.fg("text", formatDirectory(ctx.cwd));
           const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
           let git = gitInfo.branch
@@ -441,12 +471,8 @@ export default function uiCustomization(pi: ExtensionAPI) {
             : modelInfo.modelId;
 
           const lines = [
-            columns(directory, theme.fg("muted", model), contentWidth),
-            columns(
-              theme.fg("muted", usage),
-              theme.fg("muted", git),
-              contentWidth,
-            ),
+            columns(directory, theme.fg("muted", model), width),
+            columns(theme.fg("muted", usage), theme.fg("muted", git), width),
           ];
 
           // Extension statuses render after the two dashboard lines, one per row.
@@ -456,19 +482,11 @@ export default function uiCustomization(pi: ExtensionAPI) {
             .flatMap(([, text]) => text.split("\n"));
           for (const statusLine of statusLines) {
             lines.push(
-              truncateToWidth(statusLine, contentWidth, theme.fg("dim", "...")),
+              truncateToWidth(statusLine, width, theme.fg("dim", "...")),
             );
           }
 
-          const border = (text: string) => theme.fg("warning", text);
-          return [
-            border(`╭${"─".repeat(width - 2)}╮`),
-            ...lines.map(
-              (line) =>
-                `${border("│")} ${padToWidth(line, contentWidth)} ${border("│")}`,
-            ),
-            border(`╰${"─".repeat(width - 2)}╯`),
-          ];
+          return lines;
         },
       };
     });
@@ -498,6 +516,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     requestRender = undefined;
     if (ctx.mode === "tui") {
       ctx.ui.setHeader(undefined);
+      ctx.ui.setEditorComponent(undefined);
       ctx.ui.setFooter(undefined);
     }
   });
