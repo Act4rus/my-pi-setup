@@ -1,7 +1,6 @@
 import { homedir } from "node:os";
 import { relative } from "node:path";
 import {
-  DynamicBorder,
   type ExtensionAPI,
   type ExtensionContext,
   type ReadonlyFooterDataProvider,
@@ -315,9 +314,6 @@ export default function uiCustomization(pi: ExtensionAPI) {
       (tui, theme, _keybindings, done) => {
         const container = new Container();
         container.addChild(
-          new DynamicBorder((text: string) => theme.fg("borderAccent", text)),
-        );
-        container.addChild(
           new Text(
             `${theme.fg("accent", theme.bold(name))} ${theme.fg("muted", `· ${items.length} loaded`)}`,
             1,
@@ -346,12 +342,22 @@ export default function uiCustomization(pi: ExtensionAPI) {
         container.addChild(
           new Text(theme.fg("dim", "↑↓ browse · enter/esc close"), 1, 0),
         );
-        container.addChild(
-          new DynamicBorder((text: string) => theme.fg("borderAccent", text)),
-        );
 
         return {
-          render: (width: number) => container.render(width),
+          render: (width: number) => {
+            const innerWidth = Math.max(1, width - 2);
+            const border = (text: string) => theme.fg("borderAccent", text);
+            return [
+              border(`╭${"─".repeat(innerWidth)}╮`),
+              ...container
+                .render(innerWidth)
+                .map(
+                  (line) =>
+                    `${border("│")}${padToWidth(line, innerWidth)}${border("│")}`,
+                ),
+              border(`╰${"─".repeat(innerWidth)}╯`),
+            ];
+          },
           invalidate: () => container.invalidate(),
           handleInput: (data: string) => {
             list.handleInput(data);
