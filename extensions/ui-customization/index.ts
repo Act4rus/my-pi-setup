@@ -179,7 +179,10 @@ function padToWidth(text: string, width: number) {
 }
 
 class RoundedEditor extends CustomEditor {
+  frameColor: ((text: string) => string) | undefined;
+
   override render(width: number) {
+    if (this.frameColor) this.borderColor = this.frameColor;
     if (width < 4) return super.render(width);
 
     const innerWidth = width - 2;
@@ -297,6 +300,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let gitInfo = emptyGitInfoState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
+  let activeTheme: Theme | undefined;
   let resourcePanel: ResourcePanel | undefined;
   let resourcePanelTimers: Array<ReturnType<typeof setTimeout>> = [];
 
@@ -423,15 +427,19 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
     ctx.ui.setHeader((tui, theme) => {
       activeTui = tui;
+      activeTheme = theme;
       requestRender = () => tui.requestRender();
       resourcePanel = new ResourcePanel(theme);
       scheduleResourcePanel(tui);
       return resourcePanel;
     });
 
-    ctx.ui.setEditorComponent(
-      (tui, theme, keybindings) => new RoundedEditor(tui, theme, keybindings),
-    );
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+      const editor = new RoundedEditor(tui, theme, keybindings);
+      editor.frameColor = (text: string) =>
+        activeTheme?.fg("accent", text) ?? theme.borderColor(text);
+      return editor;
+    });
 
     ctx.ui.setFooter((tui, theme, footerData: ReadonlyFooterDataProvider) => {
       requestRender = () => tui.requestRender();
@@ -512,6 +520,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     for (const timer of resourcePanelTimers) clearTimeout(timer);
     resourcePanelTimers = [];
     activeTui = undefined;
+    activeTheme = undefined;
     resourcePanel = undefined;
     requestRender = undefined;
     if (ctx.mode === "tui") {
