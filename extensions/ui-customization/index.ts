@@ -21,7 +21,6 @@ import {
   isModelInfoState,
 } from "../shared/dashboard-state.ts";
 
-type Rgb = [number, number, number];
 interface RenderableNode {
   children?: RenderableNode[];
   invalidate(): void;
@@ -32,24 +31,6 @@ interface DashboardTui extends RenderableNode {
   requestRender(force?: boolean): void;
 }
 
-const RESET = "\x1b[0m";
-const BOLD = "\x1b[1m";
-const PALETTE: Rgb[] = [
-  [22, 83, 189],
-  [48, 129, 247],
-  [93, 171, 255],
-  [151, 205, 255],
-  [93, 171, 255],
-  [48, 129, 247],
-];
-const TITLE_LINES = [
-  "  ██████╗  ██╗ ",
-  "  ██╔══██╗ ██║ ",
-  "  ██████╔╝ ██║ ",
-  "  ██╔═══╝  ██║ ",
-  "  ██║      ██║ ",
-  "  ╚═╝      ╚═╝ ",
-];
 const ANSI_PATTERN =
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 // eslint-disable-next-line no-control-regex
@@ -66,43 +47,6 @@ function sanitizeTerminalLabel(text: string) {
     .replace(CSI_PATTERN, "")
     .replace(ESCAPE_PATTERN, "")
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
-}
-
-function mix(a: number, b: number, amount: number) {
-  return Math.round(a + (b - a) * amount);
-}
-
-function sampleGradient(position: number) {
-  const wrapped = ((position % 1) + 1) % 1;
-  const scaled = wrapped * PALETTE.length;
-  const index = Math.floor(scaled);
-  const nextIndex = (index + 1) % PALETTE.length;
-  const amount = scaled - index;
-  const start = PALETTE[index]!;
-  const end = PALETTE[nextIndex]!;
-
-  return [
-    mix(start[0], end[0], amount),
-    mix(start[1], end[1], amount),
-    mix(start[2], end[2], amount),
-  ] satisfies Rgb;
-}
-
-function foreground([red, green, blue]: Rgb, text: string) {
-  return `\x1b[38;2;${red};${green};${blue}m${text}${RESET}`;
-}
-
-function gradientText(text: string, phase: number) {
-  const characters = [...text];
-  const span = Math.max(characters.length - 1, 1);
-
-  return characters
-    .map((character, index) =>
-      character === " "
-        ? character
-        : foreground(sampleGradient(index / span + phase), character),
-    )
-    .join("");
 }
 
 function hasChildren(
@@ -157,11 +101,6 @@ function formatDirectory(cwd: string) {
   if (cwd === home) return "~";
   const display = cwd.startsWith(`${home}/`) ? `~/${relative(home, cwd)}` : cwd;
   return sanitizeTerminalLabel(display);
-}
-
-function center(text: string, width: number) {
-  const padding = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
-  return truncateToWidth(`${" ".repeat(padding)}${text}`, width);
 }
 
 function columns(left: string, right: string, width: number) {
@@ -226,15 +165,8 @@ export default function uiCustomization(pi: ExtensionAPI) {
       scheduleThemeRemoval(tui);
 
       return {
-        render(width: number) {
-          const art = TITLE_LINES.map((line, row) =>
-            center(gradientText(line, row * 0.045), width),
-          );
-          const subtitle = center(
-            `${BOLD}${gradientText(title, 0.18)}${RESET}`,
-            width,
-          );
-          return ["", ...art, subtitle, ""];
+        render() {
+          return [];
         },
         invalidate() {},
       };
