@@ -3,5 +3,5 @@
   "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "medium",
   "packages": ["npm:@codewithkenzo/pi-theme-switcher"],
-  "theme": "github-dark-default"
+  "theme": "orng"
 }
