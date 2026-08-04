@@ -41,7 +41,12 @@ interface ResourceSection {
   items: string[];
 }
 
-const RESOURCE_SECTION_NAMES = new Set(["Context", "Skills", "Extensions"]);
+const RESOURCE_SECTION_NAMES = new Set([
+  "Context",
+  "Skills",
+  "Prompts",
+  "Extensions",
+]);
 
 const ANSI_PATTERN =
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
@@ -187,7 +192,7 @@ function wrapItems(items: string[], width: number) {
 
 class ResourcePanel implements RenderableNode {
   private sections: ResourceSection[] = [];
-  private expanded = new Set<string>();
+  private expanded = false;
 
   constructor(private readonly theme: Theme) {}
 
@@ -195,64 +200,51 @@ class ResourcePanel implements RenderableNode {
     this.sections = sections;
   }
 
-  toggle(name: "Skills" | "Extensions") {
-    if (this.expanded.has(name)) {
-      this.expanded.delete(name);
-      return false;
-    }
-    this.expanded.add(name);
-    return true;
+  setExpanded(expanded: boolean) {
+    this.expanded = expanded;
   }
 
   render(width: number) {
-    if (this.sections.length === 0 || width < 24) return [];
+    if (this.sections.length === 0 || width < 8) return [];
 
     const contentWidth = width - 4;
     const border = (text: string) => this.theme.fg("borderMuted", text);
     const row = (content: string) =>
       `${border("│")} ${padToWidth(content, contentWidth)} ${border("│")}`;
-    const separator = `${border("├")}${border("─".repeat(width - 2))}${border("┤")}`;
-    const context = this.sections.find((section) => section.name === "Context");
-    const contextCount = context?.items.length ?? 0;
-    const contextNoun = contextCount === 1 ? "file" : "files";
-    const title = ` context · ${contextCount} ${contextNoun} `;
+    const title = " workspace ";
     const topFill = "─".repeat(Math.max(0, width - title.length - 3));
     const lines = [
       `${border("╭─")}${this.theme.fg("accent", this.theme.bold(title))}${border(`${topFill}╮`)}`,
-      row(this.theme.fg("dim", context?.items.join(" · ") ?? "none")),
     ];
 
-    for (const name of ["Skills", "Extensions"] as const) {
-      const section = this.sections.find(
-        (candidate) => candidate.name === name,
-      );
-      if (!section) continue;
+    const labelWidth = Math.min(
+      Math.max(...this.sections.map((section) => section.name.length)),
+      Math.max(1, contentWidth - 8),
+    );
+    for (const section of this.sections) {
+      const noun =
+        section.name === "Context"
+          ? section.items.length === 1
+            ? "file"
+            : "files"
+          : "loaded";
+      const summary = `${this.theme.fg("text", section.name.padEnd(labelWidth))}  ${this.theme.fg("muted", `${section.items.length} ${noun}`)}`;
+      lines.push(row(summary));
 
-      lines.push(separator);
-      const command = `/${name.toLowerCase()}`;
-      const heading = `${this.theme.fg("text", this.theme.bold(name))} ${this.theme.fg("muted", `· ${section.items.length}`)}`;
-      lines.push(
-        row(columns(heading, this.theme.fg("accent", command), contentWidth)),
-      );
-
-      const items = this.expanded.has(name)
-        ? section.items
-        : section.items.slice(0, 3);
-      const suffix =
-        !this.expanded.has(name) && section.items.length > items.length
-          ? ` · +${section.items.length - items.length}`
-          : "";
-      for (const detail of wrapItems(
-        items.length > 0
-          ? [...items.slice(0, -1), `${items.at(-1)}${suffix}`]
-          : [],
-        contentWidth,
-      )) {
-        lines.push(row(this.theme.fg("dim", detail)));
+      if (this.expanded) {
+        const indent = " ".repeat(Math.min(labelWidth + 2, contentWidth - 1));
+        const detailWidth = Math.max(1, contentWidth - indent.length);
+        for (const detail of wrapItems(section.items, detailWidth)) {
+          lines.push(row(`${indent}${this.theme.fg("dim", detail)}`));
+        }
       }
     }
 
-    lines.push(`${border("╰")}${border("─".repeat(width - 2))}${border("╯")}`);
+    const hint = this.expanded ? "ctrl+o collapse" : "ctrl+o details";
+    const bottomFill = "─".repeat(Math.max(0, width - hint.length - 4));
+    lines.push(
+      `${border("╰─")}${this.theme.fg("dim", hint)}${border(`─${bottomFill}╯`)}`,
+    );
     return ["", ...lines, ""];
   }
 
@@ -328,29 +320,6 @@ export default function uiCustomization(pi: ExtensionAPI) {
       );
     }
   }
-
-  function toggleResourceSection(
-    name: "Skills" | "Extensions",
-    ctx: ExtensionContext,
-  ) {
-    if (!resourcePanel) {
-      ctx.ui.notify("The resource panel is not available", "warning");
-      return;
-    }
-    const expanded = resourcePanel.toggle(name);
-    requestRender?.();
-    ctx.ui.notify(`${name}: ${expanded ? "expanded" : "collapsed"}`, "info");
-  }
-
-  pi.registerCommand("skills", {
-    description: "Expand or collapse loaded skills in the context bar",
-    handler: async (_args, ctx) => toggleResourceSection("Skills", ctx),
-  });
-
-  pi.registerCommand("extensions", {
-    description: "Expand or collapse loaded extensions in the context bar",
-    handler: async (_args, ctx) => toggleResourceSection("Extensions", ctx),
-  });
 
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
