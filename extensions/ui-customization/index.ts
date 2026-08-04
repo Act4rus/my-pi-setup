@@ -406,6 +406,9 @@ export default function uiCustomization(pi: ExtensionAPI) {
       return {
         invalidate() {},
         render(width: number) {
+          if (width < 6) return [];
+
+          const contentWidth = width - 4;
           const directory = theme.fg("text", formatDirectory(ctx.cwd));
           const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
           let git = gitInfo.branch
@@ -438,8 +441,12 @@ export default function uiCustomization(pi: ExtensionAPI) {
             : modelInfo.modelId;
 
           const lines = [
-            columns(directory, theme.fg("muted", model), width),
-            columns(theme.fg("muted", usage), theme.fg("muted", git), width),
+            columns(directory, theme.fg("muted", model), contentWidth),
+            columns(
+              theme.fg("muted", usage),
+              theme.fg("muted", git),
+              contentWidth,
+            ),
           ];
 
           // Extension statuses render after the two dashboard lines, one per row.
@@ -449,11 +456,19 @@ export default function uiCustomization(pi: ExtensionAPI) {
             .flatMap(([, text]) => text.split("\n"));
           for (const statusLine of statusLines) {
             lines.push(
-              truncateToWidth(statusLine, width, theme.fg("dim", "...")),
+              truncateToWidth(statusLine, contentWidth, theme.fg("dim", "...")),
             );
           }
 
-          return lines;
+          const border = (text: string) => theme.fg("warning", text);
+          return [
+            border(`╭${"─".repeat(width - 2)}╮`),
+            ...lines.map(
+              (line) =>
+                `${border("│")} ${padToWidth(line, contentWidth)} ${border("│")}`,
+            ),
+            border(`╰${"─".repeat(width - 2)}╯`),
+          ];
         },
       };
     });
