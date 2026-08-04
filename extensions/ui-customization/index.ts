@@ -4,6 +4,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ReadonlyFooterDataProvider,
+  Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
   getCapabilities,
@@ -30,6 +31,22 @@ interface RenderableNode {
 interface DashboardTui extends RenderableNode {
   requestRender(force?: boolean): void;
 }
+
+interface ExpandableNode extends RenderableNode {
+  setExpanded(expanded: boolean): void;
+}
+
+interface ResourceSection {
+  name: string;
+  items: string[];
+}
+
+const RESOURCE_SECTION_NAMES = new Set([
+  "Context",
+  "Skills",
+  "Prompts",
+  "Extensions",
+]);
 
 const ANSI_PATTERN =
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
@@ -63,6 +80,66 @@ function renderedText(component: RenderableNode) {
   }
 }
 
+function isExpandable(component: RenderableNode): component is ExpandableNode {
+  return (
+    "setExpanded" in component && typeof component.setExpanded === "function"
+  );
+}
+
+function parseResourceSection(component: RenderableNode) {
+  if (isExpandable(component)) component.setExpanded(false);
+
+  const lines = renderedText(component)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const match = lines[0]?.match(/^\[([^\]]+)\]$/);
+  if (!match || !RESOURCE_SECTION_NAMES.has(match[1]!)) return;
+
+  return {
+    name: match[1]!,
+    items: lines
+      .slice(1)
+      .join(" ")
+      .split(/,\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  } satisfies ResourceSection;
+}
+
+function extractResourceSections(component: RenderableNode): ResourceSection[] {
+  if (!hasChildren(component)) return [];
+
+  const sections: ResourceSection[] = [];
+  const indexes: number[] = [];
+  for (let index = 0; index < component.children.length; index += 1) {
+    const section = parseResourceSection(component.children[index]!);
+    if (!section) continue;
+    sections.push(section);
+    indexes.push(index);
+  }
+
+  if (sections.length > 0) {
+    for (const index of indexes.reverse()) {
+      const removeCount =
+        component.children[index + 1] &&
+        renderedText(component.children[index + 1]!).trim() === ""
+          ? 2
+          : 1;
+      component.children.splice(index, removeCount);
+    }
+    component.invalidate();
+    return sections;
+  }
+
+  for (const child of component.children) {
+    const nested = extractResourceSections(child);
+    if (nested.length > 0) return nested;
+  }
+
+  return [];
+}
+
 function hideThemesSection(component: RenderableNode) {
   if (!hasChildren(component)) return false;
 
@@ -88,6 +165,90 @@ function hideThemesSection(component: RenderableNode) {
   }
 
   return false;
+}
+
+function padToWidth(text: string, width: number) {
+  const fitted = truncateToWidth(text, width, "…");
+  return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
+}
+
+function wrapItems(items: string[], width: number) {
+  if (width <= 0) return [];
+
+  const lines: string[] = [];
+  let line = "";
+  for (const item of items) {
+    const next = line ? `${line} · ${item}` : item;
+    if (visibleWidth(next) <= width) {
+      line = next;
+      continue;
+    }
+    if (line) lines.push(line);
+    line = truncateToWidth(item, width, "…");
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+class ResourcePanel implements RenderableNode {
+  private sections: ResourceSection[] = [];
+  private expanded = false;
+
+  constructor(private readonly theme: Theme) {}
+
+  setSections(sections: ResourceSection[]) {
+    this.sections = sections;
+  }
+
+  setExpanded(expanded: boolean) {
+    this.expanded = expanded;
+  }
+
+  render(width: number) {
+    if (this.sections.length === 0 || width < 8) return [];
+
+    const contentWidth = width - 4;
+    const border = (text: string) => this.theme.fg("borderMuted", text);
+    const row = (content: string) =>
+      `${border("│")} ${padToWidth(content, contentWidth)} ${border("│")}`;
+    const title = " workspace ";
+    const topFill = "─".repeat(Math.max(0, width - title.length - 3));
+    const lines = [
+      `${border("╭─")}${this.theme.fg("accent", this.theme.bold(title))}${border(`${topFill}╮`)}`,
+    ];
+
+    const labelWidth = Math.min(
+      Math.max(...this.sections.map((section) => section.name.length)),
+      Math.max(1, contentWidth - 8),
+    );
+    for (const section of this.sections) {
+      const noun =
+        section.name === "Context"
+          ? section.items.length === 1
+            ? "file"
+            : "files"
+          : "loaded";
+      const summary = `${this.theme.fg("text", section.name.padEnd(labelWidth))}  ${this.theme.fg("muted", `${section.items.length} ${noun}`)}`;
+      lines.push(row(summary));
+
+      if (this.expanded) {
+        const indent = " ".repeat(Math.min(labelWidth + 2, contentWidth - 1));
+        const detailWidth = Math.max(1, contentWidth - indent.length);
+        for (const detail of wrapItems(section.items, detailWidth)) {
+          lines.push(row(`${indent}${this.theme.fg("dim", detail)}`));
+        }
+      }
+    }
+
+    const hint = this.expanded ? "ctrl+o collapse" : "ctrl+o details";
+    const bottomFill = "─".repeat(Math.max(0, width - hint.length - 4));
+    lines.push(
+      `${border("╰─")}${this.theme.fg("dim", hint)}${border(`─${bottomFill}╯`)}`,
+    );
+    return ["", ...lines, ""];
+  }
+
+  invalidate() {}
 }
 
 function formatTokens(tokens: number) {
@@ -129,7 +290,8 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let gitInfo = emptyGitInfoState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
-  let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
+  let resourcePanel: ResourcePanel | undefined;
+  let resourcePanelTimers: Array<ReturnType<typeof setTimeout>> = [];
 
   const stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
     if (!isModelInfoState(value)) return;
@@ -143,14 +305,17 @@ export default function uiCustomization(pi: ExtensionAPI) {
     requestRender?.();
   });
 
-  function scheduleThemeRemoval(tui: DashboardTui) {
-    for (const timer of themeRemovalTimers) clearTimeout(timer);
-    themeRemovalTimers = [];
+  function scheduleResourcePanel(tui: DashboardTui) {
+    for (const timer of resourcePanelTimers) clearTimeout(timer);
+    resourcePanelTimers = [];
 
     for (const delay of [0, 50, 250, 1_000]) {
-      themeRemovalTimers.push(
+      resourcePanelTimers.push(
         setTimeout(() => {
-          if (hideThemesSection(tui)) tui.requestRender(true);
+          const sections = extractResourceSections(tui);
+          const changed = sections.length > 0;
+          if (changed) resourcePanel?.setSections(sections);
+          if (hideThemesSection(tui) || changed) tui.requestRender(true);
         }, delay),
       );
     }
@@ -159,17 +324,12 @@ export default function uiCustomization(pi: ExtensionAPI) {
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
 
-    ctx.ui.setHeader((tui) => {
+    ctx.ui.setHeader((tui, theme) => {
       activeTui = tui;
       requestRender = () => tui.requestRender();
-      scheduleThemeRemoval(tui);
-
-      return {
-        render() {
-          return [];
-        },
-        invalidate() {},
-      };
+      resourcePanel = new ResourcePanel(theme);
+      scheduleResourcePanel(tui);
+      return resourcePanel;
     });
 
     ctx.ui.setFooter((tui, theme, footerData: ReadonlyFooterDataProvider) => {
@@ -242,15 +402,16 @@ export default function uiCustomization(pi: ExtensionAPI) {
   });
 
   pi.on("resources_discover", () => {
-    if (activeTui) scheduleThemeRemoval(activeTui);
+    if (activeTui) scheduleResourcePanel(activeTui);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     stopModelListener();
     stopGitListener();
-    for (const timer of themeRemovalTimers) clearTimeout(timer);
-    themeRemovalTimers = [];
+    for (const timer of resourcePanelTimers) clearTimeout(timer);
+    resourcePanelTimers = [];
     activeTui = undefined;
+    resourcePanel = undefined;
     requestRender = undefined;
     if (ctx.mode === "tui") {
       ctx.ui.setHeader(undefined);
