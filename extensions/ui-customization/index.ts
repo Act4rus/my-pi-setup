@@ -200,10 +200,11 @@ class ResourcePanel implements RenderableNode {
     const contextItems = context?.items.join(" · ") ?? "none";
     const contextCount = context?.items.length ?? 0;
     const contextNoun = contextCount === 1 ? "file" : "files";
-    const contextBar = ` Context · ${contextCount} ${contextNoun}  ${contextItems}`;
+    const contextHeading = `${this.theme.fg("accent", "▌")} ${this.theme.bold("Context")} ${this.theme.fg("muted", `· ${contextCount} ${contextNoun}`)}`;
     const lines = [
       "",
-      this.theme.bg("selectedBg", padToWidth(contextBar, width)),
+      contextHeading,
+      this.theme.fg("dim", `  ${contextItems}`),
     ];
 
     for (const name of ["Skills", "Extensions"] as const) {
